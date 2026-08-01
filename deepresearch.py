@@ -241,7 +241,7 @@ class ToolRegistry:
         search = DuckDuckGoSearchRun()
         wikipedia = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
         arxiv = ArxivQueryRun(api_wrapper=ArxivAPIWrapper())
-        pubmed = PubMedQueryRun(api_wrapper=PubMedAPIWrapper())
+        # pubmed = PubMedQueryRun(api_wrapper=PubMedAPIWrapper())
         
         self.tools = {
             ToolType.WEB_SEARCH: tool(
@@ -254,25 +254,25 @@ class ToolRegistry:
                 description="Search Wikipedia for encyclopedic information",
                 func=wikipedia.run
             ),
-            ToolType.ARXIV: Tool(
+            ToolType.ARXIV: tool(
                 name="Arxiv",
                 description="Search academic papers on arXiv",
                 func=arxiv.run
             ),
-            ToolType.PUBMED: Tool(
-                name="PubMed",
-                description="Search medical literature on PubMed",
-                func=pubmed.run
-            ),
+            # ToolType.PUBMED: tool(
+            #     name="PubMed",
+            #     description="Search medical literature on PubMed",
+            #     func=pubmed.run
+            # ),
         }
     
-    def get_tool(self, tool_type: ToolType) -> Optional[Tool]:
+    def get_tool(self, tool_type: ToolType) -> Optional[tool]:
         """
         Get a specific tool.
         """
         return self.tools.get(tool_type)
     
-    def select_tools_for_task(self, plan: ResearchPlan) -> List[Tool]:
+    def select_tools_for_task(self, plan: ResearchPlan) -> List[tool]:
         """
         Select appropriate tools for a research plan.
         """
@@ -282,7 +282,7 @@ class ToolRegistry:
                 selected.append(self.tools[tool_type])
         return selected
     
-    def get_parallel_tools(self, plan: ResearchPlan) -> List[List[Tool]]:
+    def get_parallel_tools(self, plan: ResearchPlan) -> List[List[tool]]:
         """
         Group independent tools for parallel execution.
         """
@@ -327,7 +327,7 @@ class ToolRegistry:
         
         return True
     
-    def _get_tool_type(self, tool: Tool) -> Optional[ToolType]:
+    def _get_tool_type(self, tool: tool) -> Optional[ToolType]:
         """
         Get the enum type of a tool.
         """
@@ -683,7 +683,7 @@ class DeepResearchAgent:
         
         return findings
     
-    async def _execute_tool_async(self, tool: Tool, query: str) -> List[ResearchFinding]:
+    async def _execute_tool_async(self, tool: tool, query: str) -> List[ResearchFinding]:
         """
         Execute a tool asynchronously.
         """
@@ -704,7 +704,7 @@ class DeepResearchAgent:
             self.memory.add_failed_attempt({"tool": tool.name, "error": str(e)})
             return []
     
-    def _execute_tool_sync(self, tool: Tool, query: str) -> List[ResearchFinding]:
+    def _execute_tool_sync(self, tool: tool, query: str) -> List[ResearchFinding]:
         """
         Execute a tool synchronously.
         """
