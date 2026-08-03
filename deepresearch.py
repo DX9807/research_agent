@@ -38,9 +38,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# ==========================================================
 # ENUMS AND CONSTANTS
-# ==========================================================
 
 class ResearchDomain(Enum):
     ACADEMIC = "academic"
@@ -576,7 +574,8 @@ class DeepResearchAgent:
 
                             Be analytical. Be skeptical. Be evidence driven. Be transparent. Be iterative. Think before acting. Verify before concluding. Never sacrifice accuracy for speed.
 
-                            Always produce the highest quality research possible."""
+                            Always produce the highest quality research possible.
+                            """
 
         return ChatPromptTemplate.from_messages([
             SystemMessage(content=system_message),
