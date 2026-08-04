@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 import re
 
 # from langchain.agents import AgentExecutor, create_react_agent
-from langchain_core.tools import tool
+from langchain_core.tools import tool,Tool
 from langchain_groq import ChatGroq
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -162,10 +162,7 @@ class ResearchMemory:
     """
     
     def __init__(self):
-        self.conversation_memory = ConversationBufferMemory(
-            memory_key="chat_history",
-            return_messages=True
-        )
+        self.conversation_memory = ConversationBufferMemory()
         self.research_memory: List[ResearchFinding] = []
         self.intermediate_findings: Dict[str, List[ResearchFinding]] = {}
         self.failed_attempts: List[Dict] = []
@@ -242,35 +239,35 @@ class ToolRegistry:
         # pubmed = PubMedQueryRun(api_wrapper=PubMedAPIWrapper())
         
         self.tools = {
-            ToolType.WEB_SEARCH: tool(
+            ToolType.WEB_SEARCH: Tool(
                 name="WebSearch",
                 description="Search the web for current information",
                 func=search.run
             ),
-            ToolType.WIKIPEDIA: tool(
+            ToolType.WIKIPEDIA: Tool(
                 name="Wikipedia",
                 description="Search Wikipedia for encyclopedic information",
                 func=wikipedia.run
             ),
-            ToolType.ARXIV: tool(
+            ToolType.ARXIV: Tool(
                 name="Arxiv",
                 description="Search academic papers on arXiv",
                 func=arxiv.run
             ),
-            # ToolType.PUBMED: tool(
+            # ToolType.PUBMED: Tool(
             #     name="PubMed",
             #     description="Search medical literature on PubMed",
             #     func=pubmed.run
             # ),
         }
     
-    def get_tool(self, tool_type: ToolType) -> Optional[tool]:
+    def get_tool(self, tool_type: ToolType) -> Optional[Tool]:
         """
         Get a specific tool.
         """
         return self.tools.get(tool_type)
     
-    def select_tools_for_task(self, plan: ResearchPlan) -> List[tool]:
+    def select_tools_for_task(self, plan: ResearchPlan) -> List[Tool]:
         """
         Select appropriate tools for a research plan.
         """
@@ -280,7 +277,7 @@ class ToolRegistry:
                 selected.append(self.tools[tool_type])
         return selected
     
-    def get_parallel_tools(self, plan: ResearchPlan) -> List[List[tool]]:
+    def get_parallel_tools(self, plan: ResearchPlan) -> List[List[Tool]]:
         """
         Group independent tools for parallel execution.
         """
@@ -325,7 +322,7 @@ class ToolRegistry:
         
         return True
     
-    def _get_tool_type(self, tool: tool) -> Optional[ToolType]:
+    def _get_tool_type(self, tool: Tool) -> Optional[ToolType]:
         """
         Get the enum type of a tool.
         """
@@ -484,10 +481,11 @@ class DeepResearchAgent:
         self.planner = ResearchPlanner(self.memory)
         
         # Initialize the LLM
-        self.llm = ChatOpenAI(
+        self.llm = ChatGroq(
             model=model_name,
             temperature=temperature,
-            streaming=True
+            streaming=True,
+            api_key = "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"
         )
         
         # Agent state
@@ -682,7 +680,7 @@ class DeepResearchAgent:
         
         return findings
     
-    async def _execute_tool_async(self, tool: tool, query: str) -> List[ResearchFinding]:
+    async def _execute_tool_async(self, tool: Tool, query: str) -> List[ResearchFinding]:
         """
         Execute a tool asynchronously.
         """
@@ -703,7 +701,7 @@ class DeepResearchAgent:
             self.memory.add_failed_attempt({"tool": tool.name, "error": str(e)})
             return []
     
-    def _execute_tool_sync(self, tool: tool, query: str) -> List[ResearchFinding]:
+    def _execute_tool_sync(self, tool: Tool, query: str) -> List[ResearchFinding]:
         """
         Execute a tool synchronously.
         """
