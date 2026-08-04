@@ -485,7 +485,7 @@ class DeepResearchAgent:
             model=model_name,
             temperature=temperature,
             streaming=True,
-            api_key = "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"
+            api_key = ""
         )
         
         # Agent state
