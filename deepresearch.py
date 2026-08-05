@@ -32,6 +32,9 @@ from langchain_community.tools import (
 )
 from langchain_community.utilities import ArxivAPIWrapper, PubMedAPIWrapper
 from langchain_community.document_loaders import UnstructuredMarkdownLoader
+import wikipedia
+
+wikipedia.set_lang('en')
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -162,7 +165,7 @@ class ResearchMemory:
     """
     
     def __init__(self):
-        self.conversation_memory = ConversationBufferMemory()
+        # self.conversation_memory = ConversationBufferMemory()
         self.research_memory: List[ResearchFinding] = []
         self.intermediate_findings: Dict[str, List[ResearchFinding]] = {}
         self.failed_attempts: List[Dict] = []
@@ -221,7 +224,10 @@ class ResearchMemory:
 # TOOL DEFINITIONS
 
 class ToolRegistry:
-    """Registry for managing and selecting tools."""
+    """
+    Registry for managing and selecting tools.
+    
+    """
     
     def __init__(self, memory: ResearchMemory):
         self.memory = memory
@@ -242,17 +248,17 @@ class ToolRegistry:
             ToolType.WEB_SEARCH: Tool(
                 name="WebSearch",
                 description="Search the web for current information",
-                func=search.run
+                func=search.invoke
             ),
             ToolType.WIKIPEDIA: Tool(
                 name="Wikipedia",
                 description="Search Wikipedia for encyclopedic information",
-                func=wikipedia.run
+                func=wikipedia.invoke
             ),
             ToolType.ARXIV: Tool(
                 name="Arxiv",
                 description="Search academic papers on arXiv",
-                func=arxiv.run
+                func=arxiv.invoke
             ),
             # ToolType.PUBMED: Tool(
             #     name="PubMed",
@@ -468,7 +474,7 @@ class DeepResearchAgent:
     
     def __init__(
         self,
-        model_name: str = "groq:llama-3.3-70b-versatile",
+        model_name: str = "llama-3.3-70b-versatile",
         temperature: float = 0.1,
         max_iterations: int = 10
     ):
@@ -485,7 +491,7 @@ class DeepResearchAgent:
             model=model_name,
             temperature=temperature,
             streaming=True,
-            api_key = ""
+            api_key = "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"
         )
         
         # Agent state
