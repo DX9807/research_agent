@@ -7,19 +7,17 @@ from enum import Enum
 from dataclasses import dataclass, field
 import re
 
-# from langchain.agents import AgentExecutor, create_react_agent
-from langchain_core.tools import tool,Tool
+# Updated imports for LangChain 1.3+
+from langchain_classic.agents import AgentExecutor, create_react_agent
+from langchain_core.tools import tool, Tool
 from langchain_groq import ChatGroq
-
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langgraph.checkpoint.memory import InMemorySaver as ConversationBufferMemory
+from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.callbacks import CallbackManager
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_community.tools.wikipedia.tool import WikipediaQueryRun
 from langchain_community.utilities.wikipedia import WikipediaAPIWrapper
-
-# Custom tools imports
 from langchain_community.document_loaders import (
     PyPDFLoader,
     TextLoader,
@@ -27,10 +25,8 @@ from langchain_community.document_loaders import (
     JSONLoader,
     UnstructuredHTMLLoader
 )
-from langchain_community.tools import (
-    ArxivQueryRun
-)
-from langchain_community.utilities import ArxivAPIWrapper, PubMedAPIWrapper
+from langchain_community.tools import ArxivQueryRun
+from langchain_community.utilities import ArxivAPIWrapper
 from langchain_community.document_loaders import UnstructuredMarkdownLoader
 import wikipedia
 
@@ -41,7 +37,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# ==========================================================
 # ENUMS AND CONSTANTS
+# ==========================================================
 
 class ResearchDomain(Enum):
     ACADEMIC = "academic"
@@ -98,8 +96,9 @@ class ToolType(Enum):
     NVD = "nvd"
 
 
-
+# ==========================================================
 # DATA STRUCTURES
+# ==========================================================
 
 @dataclass
 class ResearchFinding:
@@ -157,7 +156,9 @@ class SourceMetadata:
     accessed_date: datetime = field(default_factory=datetime.now)
 
 
+# ==========================================================
 # MEMORY MANAGEMENT
+# ==========================================================
 
 class ResearchMemory:
     """
@@ -165,7 +166,8 @@ class ResearchMemory:
     """
     
     def __init__(self):
-        # self.conversation_memory = ConversationBufferMemory()
+        # Use MemorySaver from langgraph for checkpointing
+        self.checkpoint_memory = MemorySaver()
         self.research_memory: List[ResearchFinding] = []
         self.intermediate_findings: Dict[str, List[ResearchFinding]] = {}
         self.failed_attempts: List[Dict] = []
@@ -173,6 +175,7 @@ class ResearchMemory:
         self.source_metadata: Dict[str, SourceMetadata] = {}
         self.tool_outputs: Dict[str, Any] = {}
         self.user_preferences: Dict[str, Any] = {}
+        self.conversation_history: List[Dict] = []
     
     def add_finding(self, finding: ResearchFinding, context: str = None) -> None:
         """
@@ -219,14 +222,25 @@ class ResearchMemory:
         Get source metadata.
         """
         return self.source_metadata.get(url)
+    
+    def add_conversation_message(self, role: str, content: str) -> None:
+        """
+        Add a message to conversation history.
+        """
+        self.conversation_history.append({
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now().isoformat()
+        })
 
 
+# ==========================================================
 # TOOL DEFINITIONS
+# ==========================================================
 
 class ToolRegistry:
     """
     Registry for managing and selecting tools.
-    
     """
     
     def __init__(self, memory: ResearchMemory):
@@ -238,34 +252,44 @@ class ToolRegistry:
         """
         Initialize all available tools.
         """
-        # Initialize search tools
+        # Initialize search tools - using invoke method (new in 1.3+)
         search = DuckDuckGoSearchRun()
         wikipedia = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
         arxiv = ArxivQueryRun(api_wrapper=ArxivAPIWrapper())
-        # pubmed = PubMedQueryRun(api_wrapper=PubMedAPIWrapper())
         
+        # Create tools with proper invocation methods
         self.tools = {
             ToolType.WEB_SEARCH: Tool(
                 name="WebSearch",
-                description="Search the web for current information",
-                func=search.invoke
+                description="Search the web for current information. Input: search query string.",
+                func=self._create_tool_function(search.invoke, "WebSearch")
             ),
             ToolType.WIKIPEDIA: Tool(
                 name="Wikipedia",
-                description="Search Wikipedia for encyclopedic information",
-                func=wikipedia.invoke
+                description="Search Wikipedia for encyclopedic information. Input: search query string.",
+                func=self._create_tool_function(wikipedia.invoke, "Wikipedia")
             ),
             ToolType.ARXIV: Tool(
                 name="Arxiv",
-                description="Search academic papers on arXiv",
-                func=arxiv.invoke
+                description="Search academic papers on arXiv. Input: search query string.",
+                func=self._create_tool_function(arxiv.invoke, "Arxiv")
             ),
-            # ToolType.PUBMED: Tool(
-            #     name="PubMed",
-            #     description="Search medical literature on PubMed",
-            #     func=pubmed.run
-            # ),
         }
+    
+    def _create_tool_function(self, func, tool_name: str):
+        """
+        Create a wrapper function for tool invocation.
+        """
+        def wrapper(query: str) -> str:
+            try:
+                result = func(query)
+                # Log the tool usage
+                logger.info(f"Tool {tool_name} executed successfully")
+                return result if result else f"No results found from {tool_name}"
+            except Exception as e:
+                logger.error(f"Error in tool {tool_name}: {e}")
+                return f"Error: {str(e)}"
+        return wrapper
     
     def get_tool(self, tool_type: ToolType) -> Optional[Tool]:
         """
@@ -287,7 +311,6 @@ class ToolRegistry:
         """
         Group independent tools for parallel execution.
         """
-        # Group tools that can run in parallel
         parallel_groups = []
         current_group = []
         
@@ -318,11 +341,9 @@ class ToolRegistry:
             if existing_tool:
                 existing_type = self._get_tool_type(existing_tool)
                 if existing_type:
-                    # If tools are independent, they can run in parallel
                     if (existing_type, tool_type) in independent_pairs or \
                        (tool_type, existing_type) in independent_pairs:
                         return True
-                    # Otherwise, check if they're the same type
                     if existing_type == tool_type:
                         return False
         
@@ -351,7 +372,9 @@ class ToolRegistry:
         }
 
 
+# ==========================================================
 # RESEARCH PLANNER
+# ==========================================================
 
 class ResearchPlanner:
     """
@@ -455,7 +478,6 @@ class ResearchPlanner:
         if not self.current_plan:
             return
         
-        # Update confidence based on findings
         high_conf_count = sum(1 for f in new_findings if f.confidence == ConfidenceLevel.HIGH)
         if high_conf_count > len(new_findings) / 2:
             self.current_plan.estimated_confidence = ConfidenceLevel.HIGH
@@ -465,7 +487,9 @@ class ResearchPlanner:
             self.current_plan.estimated_confidence = ConfidenceLevel.LOW
 
 
+# ==========================================================
 # CORE AGENT IMPLEMENTATION
+# ==========================================================
 
 class DeepResearchAgent:
     """
@@ -486,12 +510,12 @@ class DeepResearchAgent:
         self.tool_registry = ToolRegistry(self.memory)
         self.planner = ResearchPlanner(self.memory)
         
-        # Initialize the LLM
+        # Initialize the LLM with Groq
         self.llm = ChatGroq(
             model=model_name,
             temperature=temperature,
             streaming=True,
-            api_key = "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"
+            api_key="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"
         )
         
         # Agent state
@@ -500,6 +524,33 @@ class DeepResearchAgent:
         self.iteration_count: int = 0
         self.completed: bool = False
         
+        # Initialize the agent executor
+        self.agent_executor = None
+    
+    def _create_agent(self) -> None:
+        """
+        Create the agent executor using LangChain's agent framework.
+        """
+        prompt = self._create_agent_prompt()
+        
+        # Create the agent
+        agent = create_react_agent(
+            llm=self.llm,
+            tools=list(self.tool_registry.tools.values()),
+            prompt=prompt
+        )
+        
+        # Create the executor
+        self.agent_executor = AgentExecutor(
+            agent=agent,
+            tools=list(self.tool_registry.tools.values()),
+            memory=self.memory.checkpoint_memory,
+            verbose=True,
+            max_iterations=self.max_iterations,
+            handle_parsing_errors=True,
+            return_intermediate_steps=True
+        )
+    
     def _create_agent_prompt(self) -> ChatPromptTemplate:
         """
         Create the agent prompt with system instructions.
@@ -578,8 +629,7 @@ class DeepResearchAgent:
 
                             Be analytical. Be skeptical. Be evidence driven. Be transparent. Be iterative. Think before acting. Verify before concluding. Never sacrifice accuracy for speed.
 
-                            Always produce the highest quality research possible.
-                            """
+                            Always produce the highest quality research possible."""
 
         return ChatPromptTemplate.from_messages([
             SystemMessage(content=system_message),
@@ -592,7 +642,6 @@ class DeepResearchAgent:
         """
         Classify the research task into a domain.
         """
-        # Simple keyword-based classification
         query_lower = query.lower()
         
         classifications = {
@@ -667,7 +716,6 @@ class DeepResearchAgent:
                 tasks = []
                 for tool in group:
                     if tool:
-                        # Create a task for each tool
                         tasks.append(self._execute_tool_async(tool, plan.objective))
                 
                 if tasks:
@@ -691,13 +739,12 @@ class DeepResearchAgent:
         Execute a tool asynchronously.
         """
         try:
-            # Run the tool
-            result = tool.run(query)
+            # Use invoke method instead of run (new in 1.3+)
+            result = tool.invoke(query)
             
-            # Create findings from the result
             finding = ResearchFinding(
                 claim=f"Result from {tool.name}",
-                evidence=result,
+                evidence=result if isinstance(result, str) else str(result),
                 source=f"Tool: {tool.name}",
                 confidence=ConfidenceLevel.MEDIUM
             )
@@ -712,11 +759,12 @@ class DeepResearchAgent:
         Execute a tool synchronously.
         """
         try:
-            result = tool.run(query)
+            # Use invoke method instead of run (new in 1.3+)
+            result = tool.invoke(query)
             
             finding = ResearchFinding(
                 claim=f"Result from {tool.name}",
-                evidence=result,
+                evidence=result if isinstance(result, str) else str(result),
                 source=f"Tool: {tool.name}",
                 confidence=ConfidenceLevel.MEDIUM
             )
@@ -772,7 +820,6 @@ class DeepResearchAgent:
         
         for existing_finding in existing:
             if existing_finding.claim != finding.claim:
-                # Check if claims contradict
                 if self._claims_contradict(finding.claim, existing_finding.claim):
                     contradictions.append(existing_finding.claim)
         
@@ -782,14 +829,11 @@ class DeepResearchAgent:
         """
         Check if two claims contradict each other.
         """
-        # Simplified contradiction detection
-        # In practice, this would use more sophisticated NLP
         negative_words = ["not", "never", "no", "cannot", "unable", "incorrect", "false"]
         
         claim1_lower = claim1.lower()
         claim2_lower = claim2.lower()
         
-        # If both claims are about the same topic and one has a negative
         if any(word in claim1_lower for word in negative_words) and \
            any(word in claim2_lower for word in negative_words):
             return False
@@ -808,7 +852,7 @@ class DeepResearchAgent:
             "answered_all": self._is_objective_complete(),
             "contradictions": self._find_all_contradictions(),
             "missing_evidence": self._identify_missing_evidence(),
-            "need_more_search": len(findings) < 5,  # Arbitrary threshold
+            "need_more_search": len(findings) < 5,
             "need_another_tool": not self._tools_adequate(),
             "need_another_iteration": self.iteration_count < self.max_iterations
         }
@@ -820,7 +864,7 @@ class DeepResearchAgent:
         Check if the research objective is complete.
         """
         findings = self.memory.get_high_confidence_findings()
-        return len(findings) >= 3  # Arbitrary threshold
+        return len(findings) >= 3
     
     def _find_all_contradictions(self) -> List[Tuple[str, str]]:
         """
@@ -840,7 +884,6 @@ class DeepResearchAgent:
         """
         Identify missing evidence.
         """
-        # Simplified implementation
         return ["Need more primary sources", "Need verification from official sources"]
     
     def _tools_adequate(self) -> bool:
@@ -857,7 +900,6 @@ class DeepResearchAgent:
         findings = self.memory.get_all_findings()
         high_confidence = self.memory.get_high_confidence_findings()
         
-        # Generate sections
         sections = {
             "Executive Summary": self._generate_executive_summary(findings),
             "Problem Statement": self._generate_problem_statement(),
@@ -871,7 +913,6 @@ class DeepResearchAgent:
             "Recommendations": self._generate_recommendations(findings)
         }
         
-        # Format the report
         report = "=" * 80 + "\n"
         report += "RESEARCH REPORT\n"
         report += "=" * 80 + "\n\n"
@@ -915,13 +956,13 @@ class DeepResearchAgent:
         Generate methodology section.
         """
         return """Methodology:
-                    1. Task Classification - Identified the domain and nature of the research
-                    2. Research Planning - Created structured approach with subtasks
-                    3. Tool Selection - Selected appropriate tools based on domain
-                    4. Evidence Gathering - Collected information from multiple sources
-                    5. Verification - Cross-referenced findings against credible sources
-                    6. Synthesis - Integrated findings into coherent analysis"""
-                        
+1. Task Classification - Identified the domain and nature of the research
+2. Research Planning - Created structured approach with subtasks
+3. Tool Selection - Selected appropriate tools based on domain
+4. Evidence Gathering - Collected information from multiple sources
+5. Verification - Cross-referenced findings against credible sources
+6. Synthesis - Integrated findings into coherent analysis"""
+    
     def _generate_evidence_section(self, findings: List[ResearchFinding]) -> str:
         """
         Generate evidence section.
@@ -950,14 +991,12 @@ class DeepResearchAgent:
         
         analysis += f"Analysis of {len(findings)} total findings reveals:\n\n"
         
-        # Categorize by confidence
         high = [f for f in findings if f.confidence == ConfidenceLevel.HIGH]
         medium = [f for f in findings if f.confidence == ConfidenceLevel.MEDIUM]
         
         analysis += f"High-confidence findings: {len(high)}\n"
         analysis += f"Medium-confidence findings: {len(medium)}\n\n"
         
-        # Identify patterns
         if high:
             analysis += "**Key Patterns:**\n"
             for finding in high[:3]:
@@ -969,7 +1008,6 @@ class DeepResearchAgent:
         """
         Generate alternative views section.
         """
-        # Find contradictions to identify alternative views
         alt_views = []
         for finding in findings:
             if finding.contradictions:
@@ -986,12 +1024,12 @@ class DeepResearchAgent:
         """
         return """Limitations of this research:
 
-                1. The research relied on available public sources
-                2. Some information may be time-sensitive
-                3. Full verification of all claims may require more resources
-                4. Some sources may have inherent biases
-                5. The research was conducted within the constraints of available tools"""
-                    
+1. The research relied on available public sources
+2. Some information may be time-sensitive
+3. Full verification of all claims may require more resources
+4. Some sources may have inherent biases
+5. The research was conducted within the constraints of available tools"""
+    
     def _generate_confidence_assessment(self) -> str:
         """
         Generate confidence assessment.
@@ -1003,10 +1041,10 @@ class DeepResearchAgent:
         confidence_level = "HIGH" if high / total > 0.7 else "MEDIUM" if high / total > 0.4 else "LOW"
         
         return f"""Confidence Assessment:
-            - Overall confidence: {confidence_level}
-            - High-confidence findings: {high} out of {total}
-            - Reasons for confidence level: Based on source credibility and verification"""
-                
+- Overall confidence: {confidence_level}
+- High-confidence findings: {high} out of {total}
+- Reasons for confidence level: Based on source credibility and verification"""
+    
     def _generate_references(self) -> str:
         """
         Generate references section.
@@ -1041,7 +1079,6 @@ class DeepResearchAgent:
         
         recommendations = "## Recommendations\n\n"
         
-        # Generate based on findings
         high_conf = self.memory.get_high_confidence_findings()
         if high_conf:
             recommendations += "Based on the high-confidence findings:\n\n"
@@ -1057,9 +1094,10 @@ class DeepResearchAgent:
         
         return recommendations
 
-    
+    # ==========================================================
     # MAIN AGENT LOOP
-  
+    # ==========================================================
+    
     def research(self, query: str) -> str:
         """
         Main research method - the entry point for the agent.
@@ -1070,43 +1108,29 @@ class DeepResearchAgent:
         logger.info(f"Starting research on: {query}")
         self.current_task = query
         
-
         # STEP 1: OBSERVE
- 
         logger.info("STEP 1: OBSERVING - Understanding the task")
         
-        # Classify the task
         domain = self._classify_task(query)
         self.current_domain = domain
         
-        # Initial thought process
         thought = self._think(query, {})
         
-        # Check if more information is needed
         if thought.get("follow_up_questions"):
-            # For simplicity, return the questions
             return "I need more information:\n" + "\n".join(thought["follow_up_questions"])
         
-
         # STEP 2: PLAN
- 
         logger.info("STEP 2: PLANNING - Creating research plan")
-        
         plan = self.planner.create_plan(query, domain)
         
-
         # STEP 3: THINK
-
         logger.info("STEP 3: THINKING - Analyzing approach")
         
         # STEP 4: SELECT TOOLS
-
         logger.info("STEP 4: TOOL SELECTION - Choosing appropriate tools")
-        
         selected_tools = self.tool_registry.select_tools_for_task(plan)
         
         # MAIN RESEARCH LOOP
-
         logger.info("Starting research iterations...")
         
         all_findings = []
@@ -1116,21 +1140,14 @@ class DeepResearchAgent:
             logger.info(f"Iteration {self.iteration_count}")
             
             # STEP 5: EXECUTE (Parallel Research)
-
             logger.info("STEP 5: EXECUTING - Running research tools")
-            
-            # Execute tools based on plan
             findings = self._execute_tools(plan)
             
             # STEP 6: EVALUATE
-
             logger.info("STEP 6: EVALUATING - Analyzing results")
             
-
             # STEP 7: VERIFICATION
-
             logger.info("STEP 7: VERIFYING - Checking sources and evidence")
-            
             verified_findings = self._verify_findings(findings)
             all_findings.extend(verified_findings)
             
@@ -1138,12 +1155,9 @@ class DeepResearchAgent:
             self.planner.update_plan(verified_findings)
             
             # STEP 8: REFLECT
-
             logger.info("STEP 8: REFLECTING - Evaluating progress")
-            
             reflection = self._reflect()
             
-            # Check if we should stop
             if reflection["answered_all"] and not reflection["contradictions"]:
                 self.completed = True
                 logger.info("Research completed successfully")
@@ -1157,11 +1171,8 @@ class DeepResearchAgent:
             logger.info(f"Need more search: {reflection['need_more_search']}")
             logger.info(f"Need another tool: {reflection['need_another_tool']}")
         
-
         # STEP 9: FINAL REPORT
-
         logger.info("STEP 9: GENERATING FINAL REPORT")
-        
         report = self._generate_final_report()
         
         return report
@@ -1174,9 +1185,30 @@ class DeepResearchAgent:
         self.planner.current_plan = custom_plan
         
         return self.research(query)
+    
+    def research_with_agent(self, query: str) -> str:
+        """
+        Research using the LangChain agent executor.
+        """
+        # Initialize the agent if not already done
+        if not self.agent_executor:
+            self._create_agent()
+        
+        # Run the agent
+        try:
+            result = self.agent_executor.invoke({
+                "input": query,
+                "chat_history": self.memory.conversation_history
+            })
+            return result.get("output", "No output generated")
+        except Exception as e:
+            logger.error(f"Agent execution failed: {e}")
+            return f"Error: {str(e)}"
 
 
+# ==========================================================
 # MAIN FUNCTION
+# ==========================================================
 
 def main():
     """
@@ -1185,25 +1217,27 @@ def main():
     
     # Create the agent
     agent = DeepResearchAgent(
-        model_name="groq:llama-3.3-70b-versatile",
+        model_name="llama-3.3-70b-versatile",
         temperature=0.1,
         max_iterations=5
     )
     
     # Example queries
-    test_queries = [
-        "What are the latest advancements in quantum computing?",
-        "Explain the security vulnerabilities in the OAuth 2.0 protocol",
-        "Compare Python vs JavaScript for web development in 2024",
-        "What is the current state of AI in healthcare?"
-    ]
+    # test_queries = [
+    #     "What are the latest advancements in quantum computing?",
+    #     "Explain the security vulnerabilities in the OAuth 2.0 protocol",
+    #     "Compare Python vs JavaScript for web development in 2024",
+    #     "What is the current state of AI in healthcare?"
+    # ]
     
-    # Run research on a query
-    query = test_queries[0]
-    print(f"\n{'='*80}\nResearch Query: {query}\n{'='*80}\n")
-    
-    result = agent.research(query)
-    print(result)
+    # # Run research on a query
+    # query = test_queries[0]
+    # print(f"\n{'='*80}\nResearch Query: {query}\n{'='*80}\n")
+    query = ''
+    while query != 'exit':
+        query = input("Enter your Query:: ")
+        result = agent.research(query)
+        print(result)
 
 
 if __name__ == "__main__":
